@@ -1,0 +1,14 @@
+{
+  "name": "rook-monetized-services",
+  "version": "1.0.0",
+  "description": "Rook's x402 monetized agent services - trading analysis, code review, crypto research",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["x402", "agent", "api", "monetization", "trading", "code-review"],
+  "author": "Rook",
+  "license": "ISC",
+  "type": "commonjs"
+}
