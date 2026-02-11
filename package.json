@@ -7,8 +7,20 @@
     "start": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["x402", "agent", "api", "monetization", "trading", "code-review"],
+  "keywords": [
+    "x402",
+    "agent",
+    "api",
+    "monetization",
+    "trading",
+    "code-review"
+  ],
   "author": "Rook",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^4.21.2",
+    "viem": "^2.45.3",
+    "x402-express": "^0.1.0"
+  }
 }
