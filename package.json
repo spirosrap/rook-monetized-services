@@ -21,6 +21,6 @@
   "dependencies": {
     "express": "^4.21.2",
     "viem": "^2.45.3",
-    "x402-express": "^0.1.0"
+    "x402-express": "^1.1.0"
   }
 }
