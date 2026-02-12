@@ -1,5 +1,7 @@
 const express = require("express");
-const { paymentMiddleware } = require("x402-express");
+const { paymentMiddleware } = require("@x402/express");
+const { HTTPFacilitatorClient, x402ResourceServer } = require("@x402/core/server");
+const { registerExactEvmScheme } = require("@x402/evm/exact/server");
 const { getTradingAnalysis } = require("./tradingAnalysis");
 const { getCodeReview } = require("./codeReview");
 
@@ -10,7 +12,7 @@ app.set('trust proxy', 1);
 app.options('/api/code-review', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Payment-Requirements');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-PAYMENT, PAYMENT-SIGNATURE');
   res.status(200).end();
 });
 
@@ -18,6 +20,8 @@ app.use(express.json());
 
 // Your Coinbase Agentic Wallet address
 const PAY_TO = "0x57CE15395828cB06Dcd514918df0d8D86F815011";
+const cdpApiKey = process.env.CDP_API_KEY;
+const x402Network = process.env.X402_NETWORK || (cdpApiKey ? "eip155:8453" : "eip155:84532");
 
 // Root route - service info (no payment required)
 app.get("/", (req, res) => {
@@ -55,113 +59,50 @@ app.get("/", (req, res) => {
 const routes = {
   // Simple Ping Service - $0.01 per request
   "GET /api/ping": {
-    price: "$0.01",
-    network: "base",
-    config: {
-      description: "Simple health check that returns server status. Cheapest way to test x402 payments.",
-      outputSchema: {
-        type: "object",
-        properties: {
-          status: { type: "string" },
-          timestamp: { type: "string" },
-          uptime: { type: "number" }
-        },
-      },
+    accepts: {
+      scheme: "exact",
+      payTo: PAY_TO,
+      price: "$0.01",
+      network: x402Network,
+      maxTimeoutSeconds: 60,
     },
+    description: "Simple health check that returns server status. Cheapest way to test x402 payments.",
     resource: "https://rook-monetized-services.onrender.com/api/ping",
   },
   // Code Review Service - $0.50 per request
   "POST /api/code-review": {
-    price: "$0.50",
-    network: "base",
-    config: {
-      description: "AI-powered code review using OpenAI o3-mini. Finds bugs, security issues, performance problems, and best practice violations.",
-      inputSchema: {
-        bodyType: "json",
-        bodyFields: {
-          code: {
-            type: "string",
-            description: "Source code to review (required)",
-            required: true
-          },
-          language: {
-            type: "string",
-            description: "Programming language (e.g., 'javascript', 'python', 'rust')",
-            default: "auto-detect",
-            required: false
-          }
-        },
-      },
-      outputSchema: {
-        type: "object",
-        properties: {
-          bugs: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                severity: { type: "string" },
-                file: { type: "string" },
-                line: { type: "number" },
-                description: { type: "string" },
-                suggestion: { type: "string" }
-              }
-            }
-          },
-          suggestions: { type: "array" },
-          summary: { type: "string" },
-          complexity: { type: "string" }
-        },
-      },
+    accepts: {
+      scheme: "exact",
+      payTo: PAY_TO,
+      price: "$0.50",
+      network: x402Network,
+      maxTimeoutSeconds: 60,
     },
+    description:
+      "AI-powered code review using OpenAI o3-mini. Finds bugs, security issues, performance problems, and best practice violations.",
     resource: "https://rook-monetized-services.onrender.com/api/code-review",
   },
   // Trading Analysis Service - $0.25 per request
   "POST /api/trading-analysis": {
-    price: "$0.25",
-    network: "base",
-    config: {
-      description: "Get real-time trading analysis for any crypto pair on HyperLiquid. Returns EMA20, support/resistance, trend, and funding rate.",
-      inputSchema: {
-        bodyType: "json",
-        bodyFields: {
-          symbol: {
-            type: "string",
-            description: "Trading pair symbol (e.g., 'BTC', 'ETH', 'SOL')",
-            required: true
-          },
-          timeframe: {
-            type: "string",
-            description: "Chart timeframe: '1h', '4h', or '1d'",
-            default: "1h",
-            required: false
-          }
-        },
-      },
-      outputSchema: {
-        type: "object",
-        properties: {
-          symbol: { type: "string" },
-          currentPrice: { type: "number" },
-          ema20: { type: "number" },
-          trend: { type: "string" },
-          support: { type: "number" },
-          resistance: { type: "number" },
-          recommendation: { type: "string" },
-          fundingRate: { type: "string" },
-          dataSource: { type: "string" }
-        },
-      },
+    accepts: {
+      scheme: "exact",
+      payTo: PAY_TO,
+      price: "$0.25",
+      network: x402Network,
+      maxTimeoutSeconds: 60,
     },
+    description:
+      "Get real-time trading analysis for any crypto pair on HyperLiquid. Returns EMA20, support/resistance, trend, and funding rate.",
     resource: "https://rook-monetized-services.onrender.com/api/trading-analysis",
   },
 };
 
-const cdpApiKey = process.env.CDP_API_KEY;
 const cdpFacilitatorUrl =
-  process.env.CDP_FACILITATOR_URL || "https://api.cdp.coinbase.com/v1/x402/facilitator";
+  process.env.CDP_FACILITATOR_URL ||
+  process.env.X402_FACILITATOR_URL ||
+  (cdpApiKey ? "https://api.cdp.coinbase.com/platform/v2/x402" : "https://www.x402.org/facilitator");
 
-const facilitator = cdpApiKey
+const facilitatorConfig = cdpApiKey
   ? {
       url: cdpFacilitatorUrl,
       createAuthHeaders: async () => {
@@ -170,13 +111,16 @@ const facilitator = cdpApiKey
           verify: auth,
           settle: auth,
           supported: auth,
-          list: auth,
         };
       },
     }
-  : undefined;
+  : { url: cdpFacilitatorUrl };
 
-const payment = paymentMiddleware(PAY_TO, routes, facilitator);
+const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
+const resourceServer = registerExactEvmScheme(new x402ResourceServer(facilitatorClient));
+const rawPaymentMiddleware = paymentMiddleware(routes, resourceServer);
+const payment = (req, res, next) =>
+  Promise.resolve(rawPaymentMiddleware(req, res, next)).catch(next);
 
 // Health check - FREE (no payment required)
 app.get("/health", (req, res) => {
@@ -238,4 +182,18 @@ app.listen(PORT, () => {
   console.log(`\n🧪 Test with: curl http://localhost:${PORT}/health`);
   console.log(`\n📈 Trading analysis powered by HyperLiquid`);
   console.log(`\n🤖 Code review powered by OpenAI gpt-5-mini`);
+});
+
+app.use((err, req, res, next) => {
+  if (!err) {
+    return next();
+  }
+  console.error(err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  return res.status(500).json({
+    error: "Payment middleware error",
+    details: err.message || "Unknown error",
+  });
 });
