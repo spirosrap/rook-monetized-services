@@ -10,6 +10,19 @@ const { getCodeReview } = require("./codeReview");
 const app = express();
 app.set('trust proxy', 1);
 
+const USDC_ASSETS_BY_NETWORK = {
+  "eip155:8453": {
+    asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    name: "USD Coin",
+    version: "2",
+  },
+  "eip155:84532": {
+    asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    name: "USDC",
+    version: "2",
+  },
+};
+
 function parseLegacyCdpApiKey(rawValue) {
   if (!rawValue) {
     return {};
@@ -369,6 +382,22 @@ function parseRequestBody(body) {
   }
 }
 
+function buildUsdcAssetAmount(amount, network, assetTransferMethod) {
+  const assetInfo = USDC_ASSETS_BY_NETWORK[network] || USDC_ASSETS_BY_NETWORK["eip155:8453"];
+  const extra = {
+    name: assetInfo.name,
+    version: assetInfo.version,
+  };
+  if (assetTransferMethod) {
+    extra.assetTransferMethod = assetTransferMethod;
+  }
+  return {
+    amount,
+    asset: assetInfo.asset,
+    extra,
+  };
+}
+
 // Handle OPTIONS for x402 discovery
 app.options('/api/code-review', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -440,13 +469,24 @@ const routes = {
   },
   // Code Review Service - $0.50 per request
   "POST /api/code-review": {
-    accepts: {
-      scheme: "exact",
-      payTo: PAY_TO,
-      price: "$0.50",
-      network: x402Network,
-      maxTimeoutSeconds: 300,
-    },
+    accepts: [
+      {
+        scheme: "exact",
+        payTo: PAY_TO,
+        // Prefer permit2 for smart-wallet compatibility.
+        price: buildUsdcAssetAmount("500000", x402Network, "permit2"),
+        network: x402Network,
+        maxTimeoutSeconds: 300,
+      },
+      {
+        scheme: "exact",
+        payTo: PAY_TO,
+        // Keep eip3009 available as fallback for EOAs.
+        price: buildUsdcAssetAmount("500000", x402Network, "eip3009"),
+        network: x402Network,
+        maxTimeoutSeconds: 300,
+      },
+    ],
     description:
       "AI-powered code review using OpenAI o3-mini. Finds bugs, security issues, performance problems, and best practice violations.",
     resource: "https://rook-monetized-services.onrender.com/api/code-review",
@@ -582,8 +622,10 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
     x402Version: paymentPayload?.x402Version,
     acceptedScheme: paymentPayload?.accepted?.scheme,
     acceptedNetwork: paymentPayload?.accepted?.network,
+    acceptedAssetTransferMethod: paymentPayload?.accepted?.extra?.assetTransferMethod,
     routeNetwork: requirements?.network,
     routeAmount: requirements?.amount,
+    routeAssetTransferMethod: requirements?.extra?.assetTransferMethod,
     payloadType,
     payloadKeys,
     payloadJsonLength: payload ? JSON.stringify(payload).length : 0,
