@@ -68,6 +68,25 @@ function formatX402Error(error) {
   };
 }
 
+function parseRequestBody(body) {
+  if (!body) {
+    return {};
+  }
+  if (typeof body === "object" && !Buffer.isBuffer(body)) {
+    return body;
+  }
+  const raw = Buffer.isBuffer(body) ? body.toString("utf8") : String(body);
+  if (!raw.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 // Handle OPTIONS for x402 discovery
 app.options('/api/code-review', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -77,6 +96,7 @@ app.options('/api/code-review', (req, res) => {
 });
 
 app.use(express.json());
+app.use(express.text({ type: "*/*" }));
 
 // Your Coinbase Agentic Wallet address
 const PAY_TO = "0x57CE15395828cB06Dcd514918df0d8D86F815011";
@@ -229,10 +249,14 @@ app.get("/api/ping", payment, (req, res) => {
 });
 
 app.post("/api/trading-analysis", payment, async (req, res) => {
-  const { symbol, timeframe = '1h' } = req.body;
+  const body = parseRequestBody(req.body);
+  const { symbol, timeframe = '1h' } = body;
   
   if (!symbol) {
-    return res.status(400).json({ error: 'Symbol is required' });
+    return res.status(400).json({
+      error: "Symbol is required",
+      hint: "Send JSON body with {\"symbol\":\"BTC\",\"timeframe\":\"1h\"}",
+    });
   }
   
   const analysis = await getTradingAnalysis(symbol, timeframe);
@@ -240,10 +264,14 @@ app.post("/api/trading-analysis", payment, async (req, res) => {
 });
 
 app.post("/api/code-review", payment, async (req, res) => {
-  const { code, language = 'auto' } = req.body;
+  const body = parseRequestBody(req.body);
+  const { code, language = 'auto' } = body;
   
   if (!code) {
-    return res.status(400).json({ error: 'Code is required' });
+    return res.status(400).json({
+      error: "Code is required",
+      hint: "Send JSON body with {\"code\":\"...\",\"language\":\"javascript\"}",
+    });
   }
   
   const review = await getCodeReview(code, language);
