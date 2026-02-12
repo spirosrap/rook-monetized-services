@@ -68,6 +68,13 @@ function formatX402Error(error) {
   };
 }
 
+function maskAddress(address) {
+  if (typeof address !== "string" || address.length < 10) {
+    return address;
+  }
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
 function parseRequestBody(body) {
   if (!body) {
     return {};
@@ -222,6 +229,28 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
           ? "transaction"
           : "object"
       : typeof payload;
+  const auth = payloadType === "authorization" ? payload.authorization : null;
+  const authKeys =
+    auth && typeof auth === "object" && !Array.isArray(auth) ? Object.keys(auth) : [];
+  const authSummary = auth
+    ? {
+        from: maskAddress(auth.from),
+        to: maskAddress(auth.to),
+        fromEqualsPayTo:
+          typeof auth.from === "string" &&
+          typeof requirements?.payTo === "string" &&
+          auth.from.toLowerCase() === requirements.payTo.toLowerCase(),
+        toEqualsPayTo:
+          typeof auth.to === "string" &&
+          typeof requirements?.payTo === "string" &&
+          auth.to.toLowerCase() === requirements.payTo.toLowerCase(),
+        hasValue: typeof auth.value === "string",
+        hasValidAfter: typeof auth.validAfter === "string",
+        hasValidBefore: typeof auth.validBefore === "string",
+        nonceLength: typeof auth.nonce === "string" ? auth.nonce.length : null,
+        nonceStartsWith0x: typeof auth.nonce === "string" ? auth.nonce.startsWith("0x") : null,
+      }
+    : null;
 
   console.log("x402_before_verify", {
     x402Version: paymentPayload?.x402Version,
@@ -232,6 +261,8 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
     payloadType,
     payloadKeys,
     payloadJsonLength: payload ? JSON.stringify(payload).length : 0,
+    authKeys,
+    authSummary,
   });
 });
 
