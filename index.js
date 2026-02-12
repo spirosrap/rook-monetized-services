@@ -7,6 +7,43 @@ app.use(express.json());
 // Your Coinbase Agentic Wallet address
 const PAY_TO = "0x57CE15395828cB06Dcd514918df0d8D86F815011";
 
+// Root route - service info (no payment required)
+app.get("/", (req, res) => {
+  res.json({
+    name: "Rook Monetized Services",
+    description: "AI-powered services for agents and developers",
+    endpoints: [
+      {
+        path: "/api/crypto-research",
+        price: "$0.15",
+        description: "Undervalued crypto projects research",
+        method: "GET"
+      },
+      {
+        path: "/api/trading-analysis",
+        price: "$0.25",
+        description: "Trading analysis for crypto pairs",
+        method: "POST"
+      },
+      {
+        path: "/api/code-review",
+        price: "$0.50",
+        description: "AI code review",
+        method: "POST"
+      },
+      {
+        path: "/api/ping",
+        price: "$0.01",
+        description: "Health check with payment test",
+        method: "GET"
+      }
+    ],
+    wallet: PAY_TO,
+    network: "base",
+    version: "1.0.0"
+  });
+});
+
 // Payment middleware configuration
 const payment = paymentMiddleware(PAY_TO, {
   // Trading Analysis Service - $0.25 per request
