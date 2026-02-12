@@ -1,6 +1,7 @@
 const express = require("express");
 const { paymentMiddleware } = require("x402-express");
 const { getTradingAnalysis } = require("./tradingAnalysis");
+const { getCodeReview } = require("./codeReview");
 
 const app = express();
 app.use(express.json());
@@ -21,6 +22,12 @@ app.get("/", (req, res) => {
         method: "GET"
       },
       {
+        path: "/api/code-review",
+        price: "$0.50",
+        description: "AI code review via OpenAI Codex - finds bugs, security issues, and suggestions",
+        method: "POST"
+      },
+      {
         path: "/api/trading-analysis",
         price: "$0.25",
         description: "Real-time trading analysis via HyperLiquid",
@@ -29,8 +36,8 @@ app.get("/", (req, res) => {
     ],
     wallet: PAY_TO,
     network: "base",
-    version: "1.1.0",
-    status: "Trading analysis live - code review coming soon"
+    version: "1.2.0",
+    status: "Trading analysis + Code review live!"
   });
 });
 
@@ -48,6 +55,51 @@ const payment = paymentMiddleware(PAY_TO, {
           status: { type: "string" },
           timestamp: { type: "string" },
           uptime: { type: "number" }
+        },
+      },
+    },
+  },
+  // Code Review Service - $0.50 per request
+  "POST /api/code-review": {
+    price: "$0.50",
+    network: "base",
+    config: {
+      description: "AI-powered code review using OpenAI o3-mini. Finds bugs, security issues, performance problems, and best practice violations.",
+      inputSchema: {
+        bodyType: "json",
+        bodyFields: {
+          code: {
+            type: "string",
+            description: "Source code to review (required)",
+            required: true
+          },
+          language: {
+            type: "string",
+            description: "Programming language (e.g., 'javascript', 'python', 'rust')",
+            default: "auto-detect",
+            required: false
+          }
+        },
+      },
+      outputSchema: {
+        type: "object",
+        properties: {
+          bugs: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                severity: { type: "string" },
+                file: { type: "string" },
+                line: { type: "number" },
+                description: { type: "string" },
+                suggestion: { type: "string" }
+              }
+            }
+          },
+          suggestions: { type: "array" },
+          summary: { type: "string" },
+          complexity: { type: "string" }
         },
       },
     },
@@ -128,15 +180,28 @@ app.post("/api/trading-analysis", payment, async (req, res) => {
   res.json(analysis);
 });
 
+app.post("/api/code-review", payment, async (req, res) => {
+  const { code, language = 'auto' } = req.body;
+  
+  if (!code) {
+    return res.status(400).json({ error: 'Code is required' });
+  }
+  
+  const review = await getCodeReview(code, language);
+  res.json(review);
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Rook's Monetized Agent Services running on port ${PORT}`);
   console.log(`💰 Payment address: ${PAY_TO}`);
   console.log(`🔗 Network: Base (mainnet)`);
   console.log(`\n📋 Available endpoints:`);
-  console.log(`   GET  /health              - Free health check`);
-  console.log(`   GET  /api/ping            - $0.01 - Payment test`);
-  console.log(`   POST /api/trading-analysis - $0.25 - Real-time trading analysis`);
+  console.log(`   GET  /health               - Free health check`);
+  console.log(`   GET  /api/ping             - $0.01 - Payment test`);
+  console.log(`   POST /api/code-review       - $0.50 - AI code review (OpenAI o3-mini)`);
+  console.log(`   POST /api/trading-analysis  - $0.25 - Real-time trading analysis`);
   console.log(`\n🧪 Test with: curl http://localhost:${PORT}/health`);
-  console.log(`\n📈 Trading analysis powered by HyperLiquid real-time data`);
+  console.log(`\n📈 Trading analysis powered by HyperLiquid`);
+  console.log(`\n🤖 Code review powered by OpenAI gpt-5-mini`);
 });
