@@ -94,7 +94,16 @@ function createFallbackFacilitatorClient(primaryClient, fallbackClient, fallback
           fallbackUrl,
           reason: error.invalidReason || error.message,
         });
-        return fallbackClient.verify(paymentPayload, paymentRequirements);
+        try {
+          return await fallbackClient.verify(paymentPayload, paymentRequirements);
+        } catch (fallbackError) {
+          console.error("x402_verify_fallback_failed", {
+            fallbackUrl,
+            primaryError: formatX402Error(error),
+            fallbackError: formatX402Error(fallbackError),
+          });
+          throw fallbackError;
+        }
       }
     },
     async settle(paymentPayload, paymentRequirements) {
@@ -108,7 +117,16 @@ function createFallbackFacilitatorClient(primaryClient, fallbackClient, fallback
           fallbackUrl,
           reason: error.invalidReason || error.message,
         });
-        return fallbackClient.settle(paymentPayload, paymentRequirements);
+        try {
+          return await fallbackClient.settle(paymentPayload, paymentRequirements);
+        } catch (fallbackError) {
+          console.error("x402_settle_fallback_failed", {
+            fallbackUrl,
+            primaryError: formatX402Error(error),
+            fallbackError: formatX402Error(fallbackError),
+          });
+          throw fallbackError;
+        }
       }
     },
     async getSupported() {
@@ -421,6 +439,115 @@ function safeBigInt(value) {
   }
 }
 
+function normalizePermit2AuthorizationPayload(permit2Authorization) {
+  if (!permit2Authorization || typeof permit2Authorization !== "object" || Array.isArray(permit2Authorization)) {
+    return { permit2Authorization, changed: false };
+  }
+
+  const normalized = {
+    ...permit2Authorization,
+    permitted:
+      permit2Authorization.permitted && typeof permit2Authorization.permitted === "object"
+        ? { ...permit2Authorization.permitted }
+        : permit2Authorization.permitted,
+    witness:
+      permit2Authorization.witness && typeof permit2Authorization.witness === "object"
+        ? { ...permit2Authorization.witness }
+        : permit2Authorization.witness,
+  };
+  let changed = false;
+
+  const normalizeStringField = (obj, key) => {
+    if (!obj || obj[key] == null) {
+      return;
+    }
+    const asString = String(obj[key]).trim();
+    if (asString !== obj[key]) {
+      obj[key] = asString;
+      changed = true;
+      return;
+    }
+    if (typeof obj[key] !== "string") {
+      obj[key] = asString;
+      changed = true;
+    }
+  };
+
+  normalizeStringField(normalized, "from");
+  normalizeStringField(normalized, "spender");
+  normalizeStringField(normalized, "nonce");
+  normalizeStringField(normalized, "deadline");
+  normalizeStringField(normalized.permitted, "token");
+  normalizeStringField(normalized.permitted, "amount");
+  normalizeStringField(normalized.witness, "to");
+  normalizeStringField(normalized.witness, "validAfter");
+  normalizeStringField(normalized.witness, "extra");
+
+  const normalizedFrom = normalizeAddress(normalized.from);
+  if (normalizedFrom !== normalized.from) {
+    normalized.from = normalizedFrom;
+    changed = true;
+  }
+  const normalizedSpender = normalizeAddress(normalized.spender);
+  if (normalizedSpender !== normalized.spender) {
+    normalized.spender = normalizedSpender;
+    changed = true;
+  }
+  if (normalized.permitted && typeof normalized.permitted === "object") {
+    const normalizedToken = normalizeAddress(normalized.permitted.token);
+    if (normalizedToken !== normalized.permitted.token) {
+      normalized.permitted.token = normalizedToken;
+      changed = true;
+    }
+  }
+  if (normalized.witness && typeof normalized.witness === "object") {
+    const normalizedWitnessTo = normalizeAddress(normalized.witness.to);
+    if (normalizedWitnessTo !== normalized.witness.to) {
+      normalized.witness.to = normalizedWitnessTo;
+      changed = true;
+    }
+    if (typeof normalized.witness.extra === "string") {
+      const trimmedExtra = normalized.witness.extra.trim();
+      if (trimmedExtra !== normalized.witness.extra) {
+        normalized.witness.extra = trimmedExtra;
+        changed = true;
+      }
+      if (/^[0-9a-fA-F]+$/.test(normalized.witness.extra)) {
+        normalized.witness.extra = `0x${normalized.witness.extra}`;
+        changed = true;
+      }
+    }
+  }
+
+  const integerPaths = [
+    ["nonce"],
+    ["deadline"],
+    ["permitted", "amount"],
+    ["witness", "validAfter"],
+  ];
+  for (const path of integerPaths) {
+    let target = normalized;
+    for (let i = 0; i < path.length - 1; i += 1) {
+      target = target?.[path[i]];
+      if (!target || typeof target !== "object") {
+        target = null;
+        break;
+      }
+    }
+    if (!target) {
+      continue;
+    }
+    const key = path[path.length - 1];
+    const normalizedValue = normalizeIntegerString(target[key]);
+    if (normalizedValue !== target[key]) {
+      target[key] = normalizedValue;
+      changed = true;
+    }
+  }
+
+  return { permit2Authorization: normalized, changed };
+}
+
 function parseRequestBody(body) {
   if (!body) {
     return {};
@@ -612,17 +739,23 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
     payload && typeof payload === "object" && !Array.isArray(payload)
       ? payload.authorization
         ? "authorization"
+        : payload.permit2Authorization
+          ? "permit2Authorization"
         : payload.transaction
           ? "transaction"
           : "object"
       : typeof payload;
   let auth = payloadType === "authorization" ? payload.authorization : null;
   let authWasNormalized = false;
+  let permit2Authorization =
+    payloadType === "permit2Authorization" ? payload.permit2Authorization : null;
+  let permit2WasNormalized = false;
   let signatureWasNormalized = false;
   let signatureWasErc6492 = false;
   let signatureErc6492Unwrapped = false;
   let signatureErc6492Depth = 0;
-  let normalizedSignature = payloadType === "authorization" ? payload?.signature : undefined;
+  let normalizedSignature =
+    payload && typeof payload === "object" && !Array.isArray(payload) ? payload.signature : undefined;
   if (payloadType === "authorization") {
     const normalized = normalizeAuthorizationPayload(auth);
     auth = normalized.auth;
@@ -630,7 +763,15 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
     if (normalized.changed) {
       paymentPayload.payload.authorization = normalized.auth;
     }
-
+  } else if (payloadType === "permit2Authorization") {
+    const normalizedPermit2 = normalizePermit2AuthorizationPayload(permit2Authorization);
+    permit2Authorization = normalizedPermit2.permit2Authorization;
+    permit2WasNormalized = normalizedPermit2.changed;
+    if (normalizedPermit2.changed) {
+      paymentPayload.payload.permit2Authorization = normalizedPermit2.permit2Authorization;
+    }
+  }
+  if (payload && typeof payload === "object" && !Array.isArray(payload) && "signature" in payload) {
     const normalizedSig = normalizeSignaturePayload(paymentPayload.payload.signature);
     signatureWasNormalized = normalizedSig.changed;
     signatureWasErc6492 = normalizedSig.wasErc6492;
@@ -676,6 +817,35 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
         nonceStartsWith0x: typeof auth.nonce === "string" ? auth.nonce.startsWith("0x") : null,
       }
     : null;
+  const permit2Summary = permit2Authorization
+    ? {
+        from: maskAddress(permit2Authorization.from),
+        spender: maskAddress(permit2Authorization.spender),
+        nonce: permit2Authorization.nonce,
+        deadline: permit2Authorization.deadline,
+        deadlineDeltaSeconds:
+          safeBigInt(permit2Authorization.deadline) !== null
+            ? Number(safeBigInt(permit2Authorization.deadline) - currentTimestamp)
+            : null,
+        permittedToken: maskAddress(permit2Authorization?.permitted?.token),
+        permittedAmount: permit2Authorization?.permitted?.amount,
+        permittedAmountEqualsRoute:
+          safeBigInt(permit2Authorization?.permitted?.amount) !== null &&
+          parsedRouteAmount !== null &&
+          safeBigInt(permit2Authorization?.permitted?.amount).toString() === parsedRouteAmount.toString(),
+        witnessTo: maskAddress(permit2Authorization?.witness?.to),
+        witnessToEqualsPayTo:
+          typeof permit2Authorization?.witness?.to === "string" &&
+          typeof requirements?.payTo === "string" &&
+          permit2Authorization.witness.to.toLowerCase() === requirements.payTo.toLowerCase(),
+        witnessValidAfter: permit2Authorization?.witness?.validAfter,
+        witnessValidAfterDeltaSeconds:
+          safeBigInt(permit2Authorization?.witness?.validAfter) !== null
+            ? Number(safeBigInt(permit2Authorization.witness.validAfter) - currentTimestamp)
+            : null,
+        witnessExtra: permit2Authorization?.witness?.extra,
+      }
+    : null;
   const signatureSummary = {
     type: typeof normalizedSignature,
     isString: typeof normalizedSignature === "string",
@@ -704,6 +874,8 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
     authKeys,
     authSummary,
     authWasNormalized,
+    permit2Summary,
+    permit2WasNormalized,
     signatureSummary,
     signatureWasNormalized,
     signatureWasErc6492,
