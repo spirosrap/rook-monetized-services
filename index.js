@@ -96,6 +96,7 @@ app.options('/api/code-review', (req, res) => {
 });
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.text({ type: "*/*" }));
 
 // Your Coinbase Agentic Wallet address
@@ -250,12 +251,15 @@ app.get("/api/ping", payment, (req, res) => {
 
 app.post("/api/trading-analysis", payment, async (req, res) => {
   const body = parseRequestBody(req.body);
-  const { symbol, timeframe = '1h' } = body;
+  const symbol = body.symbol || req.query.symbol;
+  const timeframe = body.timeframe || req.query.timeframe || "1h";
   
   if (!symbol) {
-    return res.status(400).json({
+    return res.status(200).json({
+      ok: false,
       error: "Symbol is required",
-      hint: "Send JSON body with {\"symbol\":\"BTC\",\"timeframe\":\"1h\"}",
+      hint: "Send JSON body with {\"symbol\":\"BTC\",\"timeframe\":\"1h\"} or ?symbol=BTC",
+      bodyType: typeof req.body,
     });
   }
   
@@ -265,12 +269,15 @@ app.post("/api/trading-analysis", payment, async (req, res) => {
 
 app.post("/api/code-review", payment, async (req, res) => {
   const body = parseRequestBody(req.body);
-  const { code, language = 'auto' } = body;
+  const code = body.code || req.query.code;
+  const language = body.language || req.query.language || "auto";
   
   if (!code) {
-    return res.status(400).json({
+    return res.status(200).json({
+      ok: false,
       error: "Code is required",
-      hint: "Send JSON body with {\"code\":\"...\",\"language\":\"javascript\"}",
+      hint: "Send JSON body with {\"code\":\"...\",\"language\":\"javascript\"} or ?code=...",
+      bodyType: typeof req.body,
     });
   }
   
