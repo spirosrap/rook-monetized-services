@@ -638,6 +638,29 @@ app.get("/", (req, res) => {
   });
 });
 
+const enablePermit2ForCodeReview =
+  (process.env.X402_ENABLE_CODE_REVIEW_PERMIT2 || "false").toLowerCase() === "true";
+
+const codeReviewAccepts = [
+  {
+    scheme: "exact",
+    payTo: PAY_TO,
+    price: buildUsdcAssetAmount("500000", x402Network, "eip3009"),
+    network: x402Network,
+    maxTimeoutSeconds: 300,
+  },
+];
+
+if (enablePermit2ForCodeReview) {
+  codeReviewAccepts.unshift({
+    scheme: "exact",
+    payTo: PAY_TO,
+    price: buildUsdcAssetAmount("500000", x402Network, "permit2"),
+    network: x402Network,
+    maxTimeoutSeconds: 300,
+  });
+}
+
 // Payment middleware configuration with CDP facilitator
 const routes = {
   // Simple Ping Service - $0.01 per request
@@ -654,24 +677,7 @@ const routes = {
   },
   // Code Review Service - $0.50 per request
   "POST /api/code-review": {
-    accepts: [
-      {
-        scheme: "exact",
-        payTo: PAY_TO,
-        // Prefer permit2 for smart-wallet compatibility.
-        price: buildUsdcAssetAmount("500000", x402Network, "permit2"),
-        network: x402Network,
-        maxTimeoutSeconds: 300,
-      },
-      {
-        scheme: "exact",
-        payTo: PAY_TO,
-        // Keep eip3009 available as fallback for EOAs.
-        price: buildUsdcAssetAmount("500000", x402Network, "eip3009"),
-        network: x402Network,
-        maxTimeoutSeconds: 300,
-      },
-    ],
+    accepts: codeReviewAccepts,
     description:
       "AI-powered code review using OpenAI o3-mini. Finds bugs, security issues, performance problems, and best practice violations.",
     resource: "https://rook-monetized-services.onrender.com/api/code-review",
@@ -965,6 +971,11 @@ app.listen(PORT, () => {
   console.log(`💰 Payment address: ${PAY_TO}`);
   console.log(`🔗 X402 network: ${x402Network}`);
   console.log(`🏦 Facilitator: ${cdpFacilitatorUrl}`);
+  console.log(
+    `🧾 Code-review transfer method: ${
+      enablePermit2ForCodeReview ? "permit2 + eip3009" : "eip3009 only"
+    }`
+  );
   if (enableFacilitatorFallback) {
     console.log(`🏦 Fallback facilitator: ${fallbackFacilitatorUrl}`);
   }
