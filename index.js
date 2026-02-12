@@ -3,6 +3,7 @@ const { paymentMiddleware } = require("@x402/express");
 const { HTTPFacilitatorClient, x402ResourceServer } = require("@x402/core/server");
 const { registerExactEvmScheme } = require("@x402/evm/exact/server");
 const { createCdpAuthHeaders } = require("@coinbase/x402");
+const { getAddress, serializeSignature } = require("viem");
 const { getTradingAnalysis } = require("./tradingAnalysis");
 const { getCodeReview } = require("./codeReview");
 
@@ -62,6 +63,7 @@ function formatX402Error(error) {
     message: error.message,
     statusCode: error.statusCode,
     invalidReason: error.invalidReason,
+    invalidMessage: error.invalidMessage,
     errorReason: error.errorReason,
     errorMessage: error.errorMessage,
     payer: error.payer,
@@ -85,7 +87,7 @@ function normalizeHexNonce(value) {
     return trimmed;
   }
 
-  if (/^0x[0-9a-fA-F]+$/.test(trimmed)) {
+  if (/^0x[0-9a-fA-F]+$/i.test(trimmed)) {
     const hex = trimmed.slice(2).toLowerCase();
     if (hex.length === 64) {
       return `0x${hex}`;
@@ -109,7 +111,52 @@ function normalizeHexNonce(value) {
     }
   }
 
+  if (/^[0-9a-fA-F]{1,64}$/.test(trimmed)) {
+    return `0x${trimmed.toLowerCase().padStart(64, "0")}`;
+  }
+
   return trimmed;
+}
+
+function normalizeAddress(value) {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const normalizedPrefix = /^0x/i.test(trimmed) ? `0x${trimmed.slice(2)}` : trimmed;
+  try {
+    return getAddress(normalizedPrefix);
+  } catch {
+    return normalizedPrefix;
+  }
+}
+
+function normalizeIntegerString(value) {
+  if (value == null) {
+    return value;
+  }
+  const asString = String(value).trim();
+  if (!asString) {
+    return asString;
+  }
+  if (/^[0-9]+$/.test(asString)) {
+    try {
+      return BigInt(asString).toString();
+    } catch {
+      return asString;
+    }
+  }
+  if (/^0x[0-9a-fA-F]+$/i.test(asString)) {
+    try {
+      return BigInt(asString).toString();
+    } catch {
+      return asString;
+    }
+  }
+  return asString;
 }
 
 function normalizeAuthorizationPayload(auth) {
@@ -122,8 +169,38 @@ function normalizeAuthorizationPayload(auth) {
 
   const stringFields = ["from", "to", "value", "validAfter", "validBefore", "nonce"];
   for (const field of stringFields) {
-    if (normalized[field] != null && typeof normalized[field] !== "string") {
-      normalized[field] = String(normalized[field]);
+    if (normalized[field] == null) {
+      continue;
+    }
+    const normalizedField = String(normalized[field]).trim();
+    if (normalizedField !== normalized[field]) {
+      normalized[field] = normalizedField;
+      changed = true;
+      continue;
+    }
+    if (typeof normalized[field] !== "string") {
+      normalized[field] = normalizedField;
+      changed = true;
+    }
+  }
+
+  const normalizedFrom = normalizeAddress(normalized.from);
+  if (normalizedFrom !== normalized.from) {
+    normalized.from = normalizedFrom;
+    changed = true;
+  }
+
+  const normalizedTo = normalizeAddress(normalized.to);
+  if (normalizedTo !== normalized.to) {
+    normalized.to = normalizedTo;
+    changed = true;
+  }
+
+  const numberFields = ["value", "validAfter", "validBefore"];
+  for (const field of numberFields) {
+    const normalizedField = normalizeIntegerString(normalized[field]);
+    if (normalizedField !== normalized[field]) {
+      normalized[field] = normalizedField;
       changed = true;
     }
   }
@@ -137,6 +214,67 @@ function normalizeAuthorizationPayload(auth) {
   }
 
   return { auth: normalized, changed };
+}
+
+function normalizeSignaturePayload(signature) {
+  if (signature == null) {
+    return { signature, changed: false };
+  }
+
+  if (typeof signature === "string") {
+    const compact = signature.trim().replace(/\s+/g, "");
+    if (!compact) {
+      return { signature: compact, changed: compact !== signature };
+    }
+    const normalized = /^(0x)?[0-9a-fA-F]+$/.test(compact)
+      ? compact.startsWith("0x") || compact.startsWith("0X")
+        ? `0x${compact.slice(2)}`
+        : `0x${compact}`
+      : compact;
+    return { signature: normalized, changed: normalized !== signature };
+  }
+
+  if (typeof signature === "object" && !Array.isArray(signature)) {
+    if (typeof signature.signature === "string") {
+      const nested = normalizeSignaturePayload(signature.signature);
+      return { signature: nested.signature, changed: true };
+    }
+
+    const hasRs = typeof signature.r === "string" && typeof signature.s === "string";
+    const hasV = signature.v != null || signature.yParity != null;
+    if (hasRs && hasV) {
+      try {
+        const parsedV = signature.v != null ? Number(signature.v) : undefined;
+        const parsedYParity = signature.yParity != null ? Number(signature.yParity) : undefined;
+        const normalizedV = Number.isFinite(parsedV) ? parsedV : undefined;
+        const normalizedYParity = normalizedV == null && Number.isFinite(parsedYParity)
+          ? parsedYParity
+          : undefined;
+        const normalized = serializeSignature({
+          r: signature.r,
+          s: signature.s,
+          v: normalizedV,
+          yParity: normalizedYParity,
+        });
+        return { signature: normalized, changed: true };
+      } catch {
+        return { signature, changed: false };
+      }
+    }
+  }
+
+  return { signature, changed: false };
+}
+
+function safeBigInt(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  try {
+    return BigInt(value);
+  } catch {
+    return null;
+  }
 }
 
 function parseRequestBody(body) {
@@ -295,6 +433,8 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
       : typeof payload;
   let auth = payloadType === "authorization" ? payload.authorization : null;
   let authWasNormalized = false;
+  let signatureWasNormalized = false;
+  let normalizedSignature = payloadType === "authorization" ? payload?.signature : undefined;
   if (payloadType === "authorization") {
     const normalized = normalizeAuthorizationPayload(auth);
     auth = normalized.auth;
@@ -302,12 +442,21 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
     if (normalized.changed) {
       paymentPayload.payload.authorization = normalized.auth;
     }
-    if (typeof paymentPayload.payload.signature === "string" && !paymentPayload.payload.signature.startsWith("0x")) {
-      paymentPayload.payload.signature = `0x${paymentPayload.payload.signature}`;
+
+    const normalizedSig = normalizeSignaturePayload(paymentPayload.payload.signature);
+    signatureWasNormalized = normalizedSig.changed;
+    normalizedSignature = normalizedSig.signature;
+    if (normalizedSig.changed) {
+      paymentPayload.payload.signature = normalizedSig.signature;
     }
   }
   const authKeys =
     auth && typeof auth === "object" && !Array.isArray(auth) ? Object.keys(auth) : [];
+  const parsedAuthValue = safeBigInt(auth?.value);
+  const parsedRouteAmount = safeBigInt(requirements?.amount);
+  const parsedValidAfter = safeBigInt(auth?.validAfter);
+  const parsedValidBefore = safeBigInt(auth?.validBefore);
+  const currentTimestamp = BigInt(Math.floor(Date.now() / 1000));
   const authSummary = auth
     ? {
         from: maskAddress(auth.from),
@@ -320,13 +469,31 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
           typeof auth.to === "string" &&
           typeof requirements?.payTo === "string" &&
           auth.to.toLowerCase() === requirements.payTo.toLowerCase(),
+        value: auth.value,
+        valueEqualsAmount:
+          parsedAuthValue !== null &&
+          parsedRouteAmount !== null &&
+          parsedAuthValue.toString() === parsedRouteAmount.toString(),
         hasValue: typeof auth.value === "string",
         hasValidAfter: typeof auth.validAfter === "string",
         hasValidBefore: typeof auth.validBefore === "string",
+        validAfterDeltaSeconds:
+          parsedValidAfter !== null ? Number(parsedValidAfter - currentTimestamp) : null,
+        validBeforeDeltaSeconds:
+          parsedValidBefore !== null ? Number(parsedValidBefore - currentTimestamp) : null,
         nonceLength: typeof auth.nonce === "string" ? auth.nonce.length : null,
         nonceStartsWith0x: typeof auth.nonce === "string" ? auth.nonce.startsWith("0x") : null,
       }
     : null;
+  const signatureSummary = {
+    type: typeof normalizedSignature,
+    isString: typeof normalizedSignature === "string",
+    length: typeof normalizedSignature === "string" ? normalizedSignature.length : null,
+    startsWith0x:
+      typeof normalizedSignature === "string" ? /^0x/i.test(normalizedSignature) : null,
+    hasWhitespace:
+      typeof normalizedSignature === "string" ? /\s/.test(normalizedSignature) : null,
+  };
 
   console.log("x402_before_verify", {
     x402Version: paymentPayload?.x402Version,
@@ -340,6 +507,8 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
     authKeys,
     authSummary,
     authWasNormalized,
+    signatureSummary,
+    signatureWasNormalized,
   });
 });
 
