@@ -4,6 +4,7 @@ const { getTradingAnalysis } = require("./tradingAnalysis");
 const { getCodeReview } = require("./codeReview");
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.json());
 
 // Your Coinbase Agentic Wallet address
@@ -58,6 +59,7 @@ const payment = paymentMiddleware(PAY_TO, {
         },
       },
     },
+    resource: "https://rook-monetized-services.onrender.com/api/ping",
   },
   // Code Review Service - $0.50 per request
   "POST /api/code-review": {
@@ -103,6 +105,7 @@ const payment = paymentMiddleware(PAY_TO, {
         },
       },
     },
+    resource: "https://rook-monetized-services.onrender.com/api/code-review",
   },
   // Trading Analysis Service - $0.25 per request
   "POST /api/trading-analysis": {
@@ -141,6 +144,7 @@ const payment = paymentMiddleware(PAY_TO, {
         },
       },
     },
+    resource: "https://rook-monetized-services.onrender.com/api/trading-analysis",
   },
 });
 
