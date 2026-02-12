@@ -218,7 +218,13 @@ function normalizeAuthorizationPayload(auth) {
 
 function normalizeSignaturePayload(signature) {
   if (signature == null) {
-    return { signature, changed: false, wasErc6492: false, erc6492Unwrapped: false };
+    return {
+      signature,
+      changed: false,
+      wasErc6492: false,
+      erc6492Unwrapped: false,
+      erc6492Depth: 0,
+    };
   }
 
   if (typeof signature === "string") {
@@ -229,6 +235,7 @@ function normalizeSignaturePayload(signature) {
         changed: compact !== signature,
         wasErc6492: false,
         erc6492Unwrapped: false,
+        erc6492Depth: 0,
       };
     }
     const normalizedHex = /^(0x)?[0-9a-fA-F]+$/.test(compact)
@@ -240,24 +247,40 @@ function normalizeSignaturePayload(signature) {
     let changed = normalized !== signature;
     let wasErc6492 = false;
     let erc6492Unwrapped = false;
+    let erc6492Depth = 0;
 
     if (/^0x[0-9a-fA-F]+$/.test(normalized) && normalized.length > 132) {
-      try {
-        const parsed = parseErc6492Signature(normalized);
-        if (parsed?.signature && /^0x[0-9a-fA-F]+$/.test(parsed.signature)) {
-          wasErc6492 = true;
-          if (parsed.signature !== normalized) {
-            normalized = parsed.signature;
-            changed = true;
-            erc6492Unwrapped = true;
+      for (let depth = 0; depth < 5; depth += 1) {
+        try {
+          const parsed = parseErc6492Signature(normalized);
+          if (!parsed?.signature || !/^0x[0-9a-fA-F]+$/.test(parsed.signature)) {
+            break;
           }
+          wasErc6492 = true;
+          if (parsed.signature === normalized) {
+            break;
+          }
+          normalized = parsed.signature;
+          changed = true;
+          erc6492Unwrapped = true;
+          erc6492Depth += 1;
+          if (normalized.length <= 132) {
+            break;
+          }
+        } catch {
+          // No more EIP-6492 wrappers to peel.
+          break;
         }
-      } catch {
-        // Not an EIP-6492 wrapped signature.
       }
     }
 
-    return { signature: normalized, changed, wasErc6492, erc6492Unwrapped };
+    return {
+      signature: normalized,
+      changed,
+      wasErc6492,
+      erc6492Unwrapped,
+      erc6492Depth,
+    };
   }
 
   if (typeof signature === "object" && !Array.isArray(signature)) {
@@ -268,6 +291,7 @@ function normalizeSignaturePayload(signature) {
         changed: true,
         wasErc6492: nested.wasErc6492,
         erc6492Unwrapped: nested.erc6492Unwrapped,
+        erc6492Depth: nested.erc6492Depth,
       };
     }
 
@@ -287,14 +311,32 @@ function normalizeSignaturePayload(signature) {
           v: normalizedV,
           yParity: normalizedYParity,
         });
-        return { signature: normalized, changed: true, wasErc6492: false, erc6492Unwrapped: false };
+        return {
+          signature: normalized,
+          changed: true,
+          wasErc6492: false,
+          erc6492Unwrapped: false,
+          erc6492Depth: 0,
+        };
       } catch {
-        return { signature, changed: false, wasErc6492: false, erc6492Unwrapped: false };
+        return {
+          signature,
+          changed: false,
+          wasErc6492: false,
+          erc6492Unwrapped: false,
+          erc6492Depth: 0,
+        };
       }
     }
   }
 
-  return { signature, changed: false, wasErc6492: false, erc6492Unwrapped: false };
+  return {
+    signature,
+    changed: false,
+    wasErc6492: false,
+    erc6492Unwrapped: false,
+    erc6492Depth: 0,
+  };
 }
 
 function safeBigInt(value) {
@@ -467,6 +509,7 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
   let signatureWasNormalized = false;
   let signatureWasErc6492 = false;
   let signatureErc6492Unwrapped = false;
+  let signatureErc6492Depth = 0;
   let normalizedSignature = payloadType === "authorization" ? payload?.signature : undefined;
   if (payloadType === "authorization") {
     const normalized = normalizeAuthorizationPayload(auth);
@@ -480,6 +523,7 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
     signatureWasNormalized = normalizedSig.changed;
     signatureWasErc6492 = normalizedSig.wasErc6492;
     signatureErc6492Unwrapped = normalizedSig.erc6492Unwrapped;
+    signatureErc6492Depth = normalizedSig.erc6492Depth;
     normalizedSignature = normalizedSig.signature;
     if (normalizedSig.changed) {
       paymentPayload.payload.signature = normalizedSig.signature;
@@ -550,6 +594,7 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
     signatureWasNormalized,
     signatureWasErc6492,
     signatureErc6492Unwrapped,
+    signatureErc6492Depth,
   });
 });
 
