@@ -1,5 +1,6 @@
 const express = require("express");
 const { paymentMiddleware } = require("x402-express");
+const { getTradingAnalysis } = require("./tradingAnalysis");
 
 const app = express();
 app.use(express.json());
@@ -18,16 +19,22 @@ app.get("/", (req, res) => {
         price: "$0.01",
         description: "Health check with payment test",
         method: "GET"
+      },
+      {
+        path: "/api/trading-analysis",
+        price: "$0.25",
+        description: "Real-time trading analysis via HyperLiquid",
+        method: "POST"
       }
     ],
     wallet: PAY_TO,
     network: "base",
-    version: "1.0.0",
-    status: "Demo service - real endpoints coming soon"
+    version: "1.1.0",
+    status: "Trading analysis live - code review coming soon"
   });
 });
 
-// Payment middleware configuration - only ping endpoint
+// Payment middleware configuration
 const payment = paymentMiddleware(PAY_TO, {
   // Simple Ping Service - $0.01 per request
   "GET /api/ping": {
@@ -45,6 +52,44 @@ const payment = paymentMiddleware(PAY_TO, {
       },
     },
   },
+  // Trading Analysis Service - $0.25 per request
+  "POST /api/trading-analysis": {
+    price: "$0.25",
+    network: "base",
+    config: {
+      description: "Get real-time trading analysis for any crypto pair on HyperLiquid. Returns EMA20, support/resistance, trend, and funding rate.",
+      inputSchema: {
+        bodyType: "json",
+        bodyFields: {
+          symbol: {
+            type: "string",
+            description: "Trading pair symbol (e.g., 'BTC', 'ETH', 'SOL')",
+            required: true
+          },
+          timeframe: {
+            type: "string",
+            description: "Chart timeframe: '1h', '4h', or '1d'",
+            default: "1h",
+            required: false
+          }
+        },
+      },
+      outputSchema: {
+        type: "object",
+        properties: {
+          symbol: { type: "string" },
+          currentPrice: { type: "number" },
+          ema20: { type: "number" },
+          trend: { type: "string" },
+          support: { type: "number" },
+          resistance: { type: "number" },
+          recommendation: { type: "string" },
+          fundingRate: { type: "string" },
+          dataSource: { type: "string" }
+        },
+      },
+    },
+  },
 });
 
 // Health check - FREE (no payment required)
@@ -53,11 +98,12 @@ app.get("/health", (req, res) => {
     status: "ok", 
     service: "Rook's Monetized Agent Services",
     endpoints: [
-      { path: "/api/ping", price: "$0.01", description: "Health check with payment test" }
+      { path: "/api/ping", price: "$0.01", description: "Health check with payment test" },
+      { path: "/api/trading-analysis", price: "$0.25", description: "Real-time trading analysis via HyperLiquid" }
     ],
     wallet: PAY_TO,
     network: "base",
-    note: "Real services coming soon. Currently for x402 payment testing only."
+    note: "Trading analysis live using HyperLiquid real-time data"
   });
 });
 
@@ -67,8 +113,19 @@ app.get("/api/ping", payment, (req, res) => {
     status: "pong", 
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    note: "x402 payment successful! Real endpoints coming soon."
+    note: "x402 payment successful!"
   });
+});
+
+app.post("/api/trading-analysis", payment, async (req, res) => {
+  const { symbol, timeframe = '1h' } = req.body;
+  
+  if (!symbol) {
+    return res.status(400).json({ error: 'Symbol is required' });
+  }
+  
+  const analysis = await getTradingAnalysis(symbol, timeframe);
+  res.json(analysis);
 });
 
 const PORT = process.env.PORT || 3000;
@@ -79,6 +136,7 @@ app.listen(PORT, () => {
   console.log(`\n📋 Available endpoints:`);
   console.log(`   GET  /health              - Free health check`);
   console.log(`   GET  /api/ping            - $0.01 - Payment test`);
+  console.log(`   POST /api/trading-analysis - $0.25 - Real-time trading analysis`);
   console.log(`\n🧪 Test with: curl http://localhost:${PORT}/health`);
-  console.log(`\n⚠️  Note: Real services (trading analysis, code review) coming soon.`);
+  console.log(`\n📈 Trading analysis powered by HyperLiquid real-time data`);
 });
