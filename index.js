@@ -42,8 +42,14 @@ app.get("/", (req, res) => {
   });
 });
 
-// Payment middleware configuration
+// Payment middleware configuration with CDP facilitator
 const payment = paymentMiddleware(PAY_TO, {
+  facilitatorUrl: process.env.CDP_FACILITATOR_URL || 'https://api.cdp.coinbase.com/v1/x402/facilitator',
+  facilitatorHeaders: {
+    'Authorization': `Bearer ${process.env.CDP_API_KEY}`,
+    'Content-Type': 'application/json'
+  }
+}, {
   // Simple Ping Service - $0.01 per request
   "GET /api/ping": {
     price: "$0.01",
