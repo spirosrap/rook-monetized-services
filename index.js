@@ -53,6 +53,21 @@ function normalizeFacilitatorUrl(rawUrl) {
   return rawUrl.endsWith("/") ? rawUrl.slice(0, -1) : rawUrl;
 }
 
+function formatX402Error(error) {
+  if (!error) {
+    return { message: "Unknown error" };
+  }
+  return {
+    name: error.name,
+    message: error.message,
+    statusCode: error.statusCode,
+    invalidReason: error.invalidReason,
+    errorReason: error.errorReason,
+    errorMessage: error.errorMessage,
+    payer: error.payer,
+  };
+}
+
 // Handle OPTIONS for x402 discovery
 app.options('/api/code-review', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -163,6 +178,27 @@ const facilitatorConfig = hasCdpAuth
 
 const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
 const resourceServer = registerExactEvmScheme(new x402ResourceServer(facilitatorClient));
+
+resourceServer.onVerifyFailure(({ error, requirements }) => {
+  console.error("x402_verify_failure", {
+    network: requirements?.network,
+    scheme: requirements?.scheme,
+    payTo: requirements?.payTo,
+    amount: requirements?.amount,
+    error: formatX402Error(error),
+  });
+});
+
+resourceServer.onSettleFailure(({ error, requirements }) => {
+  console.error("x402_settle_failure", {
+    network: requirements?.network,
+    scheme: requirements?.scheme,
+    payTo: requirements?.payTo,
+    amount: requirements?.amount,
+    error: formatX402Error(error),
+  });
+});
+
 const rawPaymentMiddleware = paymentMiddleware(routes, resourceServer);
 const payment = (req, res, next) =>
   Promise.resolve(rawPaymentMiddleware(req, res, next)).catch(next);
