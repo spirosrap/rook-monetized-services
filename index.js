@@ -3,7 +3,7 @@ const { paymentMiddleware } = require("@x402/express");
 const { HTTPFacilitatorClient, x402ResourceServer } = require("@x402/core/server");
 const { registerExactEvmScheme } = require("@x402/evm/exact/server");
 const { createCdpAuthHeaders } = require("@coinbase/x402");
-const { getAddress, serializeSignature } = require("viem");
+const { getAddress, parseErc6492Signature, serializeSignature } = require("viem");
 const { getTradingAnalysis } = require("./tradingAnalysis");
 const { getCodeReview } = require("./codeReview");
 
@@ -218,26 +218,57 @@ function normalizeAuthorizationPayload(auth) {
 
 function normalizeSignaturePayload(signature) {
   if (signature == null) {
-    return { signature, changed: false };
+    return { signature, changed: false, wasErc6492: false, erc6492Unwrapped: false };
   }
 
   if (typeof signature === "string") {
     const compact = signature.trim().replace(/\s+/g, "");
     if (!compact) {
-      return { signature: compact, changed: compact !== signature };
+      return {
+        signature: compact,
+        changed: compact !== signature,
+        wasErc6492: false,
+        erc6492Unwrapped: false,
+      };
     }
-    const normalized = /^(0x)?[0-9a-fA-F]+$/.test(compact)
+    const normalizedHex = /^(0x)?[0-9a-fA-F]+$/.test(compact)
       ? compact.startsWith("0x") || compact.startsWith("0X")
         ? `0x${compact.slice(2)}`
         : `0x${compact}`
       : compact;
-    return { signature: normalized, changed: normalized !== signature };
+    let normalized = normalizedHex;
+    let changed = normalized !== signature;
+    let wasErc6492 = false;
+    let erc6492Unwrapped = false;
+
+    if (/^0x[0-9a-fA-F]+$/.test(normalized) && normalized.length > 132) {
+      try {
+        const parsed = parseErc6492Signature(normalized);
+        if (parsed?.signature && /^0x[0-9a-fA-F]+$/.test(parsed.signature)) {
+          wasErc6492 = true;
+          if (parsed.signature !== normalized) {
+            normalized = parsed.signature;
+            changed = true;
+            erc6492Unwrapped = true;
+          }
+        }
+      } catch {
+        // Not an EIP-6492 wrapped signature.
+      }
+    }
+
+    return { signature: normalized, changed, wasErc6492, erc6492Unwrapped };
   }
 
   if (typeof signature === "object" && !Array.isArray(signature)) {
     if (typeof signature.signature === "string") {
       const nested = normalizeSignaturePayload(signature.signature);
-      return { signature: nested.signature, changed: true };
+      return {
+        signature: nested.signature,
+        changed: true,
+        wasErc6492: nested.wasErc6492,
+        erc6492Unwrapped: nested.erc6492Unwrapped,
+      };
     }
 
     const hasRs = typeof signature.r === "string" && typeof signature.s === "string";
@@ -256,14 +287,14 @@ function normalizeSignaturePayload(signature) {
           v: normalizedV,
           yParity: normalizedYParity,
         });
-        return { signature: normalized, changed: true };
+        return { signature: normalized, changed: true, wasErc6492: false, erc6492Unwrapped: false };
       } catch {
-        return { signature, changed: false };
+        return { signature, changed: false, wasErc6492: false, erc6492Unwrapped: false };
       }
     }
   }
 
-  return { signature, changed: false };
+  return { signature, changed: false, wasErc6492: false, erc6492Unwrapped: false };
 }
 
 function safeBigInt(value) {
@@ -434,6 +465,8 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
   let auth = payloadType === "authorization" ? payload.authorization : null;
   let authWasNormalized = false;
   let signatureWasNormalized = false;
+  let signatureWasErc6492 = false;
+  let signatureErc6492Unwrapped = false;
   let normalizedSignature = payloadType === "authorization" ? payload?.signature : undefined;
   if (payloadType === "authorization") {
     const normalized = normalizeAuthorizationPayload(auth);
@@ -445,6 +478,8 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
 
     const normalizedSig = normalizeSignaturePayload(paymentPayload.payload.signature);
     signatureWasNormalized = normalizedSig.changed;
+    signatureWasErc6492 = normalizedSig.wasErc6492;
+    signatureErc6492Unwrapped = normalizedSig.erc6492Unwrapped;
     normalizedSignature = normalizedSig.signature;
     if (normalizedSig.changed) {
       paymentPayload.payload.signature = normalizedSig.signature;
@@ -493,6 +528,10 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
       typeof normalizedSignature === "string" ? /^0x/i.test(normalizedSignature) : null,
     hasWhitespace:
       typeof normalizedSignature === "string" ? /\s/.test(normalizedSignature) : null,
+    isHex:
+      typeof normalizedSignature === "string" ? /^0x[0-9a-fA-F]+$/.test(normalizedSignature) : null,
+    looksErc6492Wrapped:
+      typeof normalizedSignature === "string" ? normalizedSignature.length > 132 : null,
   };
 
   console.log("x402_before_verify", {
@@ -509,6 +548,8 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
     authWasNormalized,
     signatureSummary,
     signatureWasNormalized,
+    signatureWasErc6492,
+    signatureErc6492Unwrapped,
   });
 });
 
