@@ -210,6 +210,31 @@ resourceServer.onVerifyFailure(({ error, requirements }) => {
   });
 });
 
+resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
+  const payload = paymentPayload?.payload;
+  const payloadKeys =
+    payload && typeof payload === "object" && !Array.isArray(payload) ? Object.keys(payload) : [];
+  const payloadType =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload.authorization
+        ? "authorization"
+        : payload.transaction
+          ? "transaction"
+          : "object"
+      : typeof payload;
+
+  console.log("x402_before_verify", {
+    x402Version: paymentPayload?.x402Version,
+    acceptedScheme: paymentPayload?.accepted?.scheme,
+    acceptedNetwork: paymentPayload?.accepted?.network,
+    routeNetwork: requirements?.network,
+    routeAmount: requirements?.amount,
+    payloadType,
+    payloadKeys,
+    payloadJsonLength: payload ? JSON.stringify(payload).length : 0,
+  });
+});
+
 resourceServer.onSettleFailure(({ error, requirements }) => {
   console.error("x402_settle_failure", {
     network: requirements?.network,
