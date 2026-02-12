@@ -5,6 +5,15 @@ const { getCodeReview } = require("./codeReview");
 
 const app = express();
 app.set('trust proxy', 1);
+
+// Handle OPTIONS for x402 discovery
+app.options('/api/code-review', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Payment-Requirements');
+  res.status(200).end();
+});
+
 app.use(express.json());
 
 // Your Coinbase Agentic Wallet address
