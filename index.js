@@ -67,6 +67,64 @@ function normalizeFacilitatorUrl(rawUrl) {
   return rawUrl.endsWith("/") ? rawUrl.slice(0, -1) : rawUrl;
 }
 
+function shouldFallbackForFacilitatorError(error) {
+  if (!error) {
+    return false;
+  }
+  const reason = typeof error.invalidReason === "string" ? error.invalidReason : "";
+  const message = typeof error.message === "string" ? error.message : "";
+  return (
+    reason === "invalid_payload" ||
+    message.includes("invalid_payload") ||
+    message.includes("Unexpected token") ||
+    message.includes("Failed to parse")
+  );
+}
+
+function createFallbackFacilitatorClient(primaryClient, fallbackClient, fallbackUrl) {
+  return {
+    async verify(paymentPayload, paymentRequirements) {
+      try {
+        return await primaryClient.verify(paymentPayload, paymentRequirements);
+      } catch (error) {
+        if (!shouldFallbackForFacilitatorError(error)) {
+          throw error;
+        }
+        console.warn("x402_verify_retry_with_fallback_facilitator", {
+          fallbackUrl,
+          reason: error.invalidReason || error.message,
+        });
+        return fallbackClient.verify(paymentPayload, paymentRequirements);
+      }
+    },
+    async settle(paymentPayload, paymentRequirements) {
+      try {
+        return await primaryClient.settle(paymentPayload, paymentRequirements);
+      } catch (error) {
+        if (!shouldFallbackForFacilitatorError(error)) {
+          throw error;
+        }
+        console.warn("x402_settle_retry_with_fallback_facilitator", {
+          fallbackUrl,
+          reason: error.invalidReason || error.message,
+        });
+        return fallbackClient.settle(paymentPayload, paymentRequirements);
+      }
+    },
+    async getSupported() {
+      try {
+        return await primaryClient.getSupported();
+      } catch (error) {
+        console.warn("x402_supported_retry_with_fallback_facilitator", {
+          fallbackUrl,
+          message: error?.message,
+        });
+        return fallbackClient.getSupported();
+      }
+    },
+  };
+}
+
 function formatX402Error(error) {
   if (!error) {
     return { message: "Unknown error" };
@@ -511,6 +569,12 @@ const cdpFacilitatorUrl = normalizeFacilitatorUrl(
     process.env.X402_FACILITATOR_URL ||
     (hasCdpAuth ? "https://api.cdp.coinbase.com/platform/v2/x402" : "https://www.x402.org/facilitator")
 );
+const fallbackFacilitatorUrl = normalizeFacilitatorUrl(
+  process.env.X402_FALLBACK_FACILITATOR_URL || "https://www.x402.org/facilitator"
+);
+const enableFacilitatorFallback =
+  (process.env.X402_ENABLE_FACILITATOR_FALLBACK || "true").toLowerCase() !== "false" &&
+  cdpFacilitatorUrl !== fallbackFacilitatorUrl;
 
 const facilitatorConfig = hasCdpAuth
   ? {
@@ -519,7 +583,15 @@ const facilitatorConfig = hasCdpAuth
     }
   : { url: cdpFacilitatorUrl };
 
-const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
+const primaryFacilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
+const fallbackFacilitatorClient = new HTTPFacilitatorClient({ url: fallbackFacilitatorUrl });
+const facilitatorClient = enableFacilitatorFallback
+  ? createFallbackFacilitatorClient(
+      primaryFacilitatorClient,
+      fallbackFacilitatorClient,
+      fallbackFacilitatorUrl
+    )
+  : primaryFacilitatorClient;
 const resourceServer = registerExactEvmScheme(new x402ResourceServer(facilitatorClient));
 
 resourceServer.onVerifyFailure(({ error, requirements }) => {
@@ -721,6 +793,9 @@ app.listen(PORT, () => {
   console.log(`💰 Payment address: ${PAY_TO}`);
   console.log(`🔗 X402 network: ${x402Network}`);
   console.log(`🏦 Facilitator: ${cdpFacilitatorUrl}`);
+  if (enableFacilitatorFallback) {
+    console.log(`🏦 Fallback facilitator: ${fallbackFacilitatorUrl}`);
+  }
   if (!hasCdpAuth && process.env.CDP_API_KEY) {
     console.log(
       "⚠️ CDP_API_KEY is set but x402 v2 requires CDP_API_KEY_ID + CDP_API_KEY_SECRET for mainnet facilitator auth."
