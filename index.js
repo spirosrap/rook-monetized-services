@@ -2,7 +2,7 @@ const express = require("express");
 const { paymentMiddleware } = require("@x402/express");
 const { HTTPFacilitatorClient, x402ResourceServer } = require("@x402/core/server");
 const { registerExactEvmScheme } = require("@x402/evm/exact/server");
-const { generateJwt } = require("@coinbase/cdp-sdk/auth");
+const { createCdpAuthHeaders } = require("@coinbase/x402");
 const { getTradingAnalysis } = require("./tradingAnalysis");
 const { getCodeReview } = require("./codeReview");
 
@@ -44,6 +44,13 @@ function parseLegacyCdpApiKey(rawValue) {
   }
 
   return {};
+}
+
+function normalizeFacilitatorUrl(rawUrl) {
+  if (!rawUrl) {
+    return rawUrl;
+  }
+  return rawUrl.endsWith("/") ? rawUrl.slice(0, -1) : rawUrl;
 }
 
 // Handle OPTIONS for x402 discovery
@@ -108,7 +115,7 @@ const routes = {
       payTo: PAY_TO,
       price: "$0.01",
       network: x402Network,
-      maxTimeoutSeconds: 60,
+      maxTimeoutSeconds: 120,
     },
     description: "Simple health check that returns server status. Cheapest way to test x402 payments.",
     resource: "https://rook-monetized-services.onrender.com/api/ping",
@@ -120,7 +127,7 @@ const routes = {
       payTo: PAY_TO,
       price: "$0.50",
       network: x402Network,
-      maxTimeoutSeconds: 60,
+      maxTimeoutSeconds: 300,
     },
     description:
       "AI-powered code review using OpenAI o3-mini. Finds bugs, security issues, performance problems, and best practice violations.",
@@ -133,7 +140,7 @@ const routes = {
       payTo: PAY_TO,
       price: "$0.25",
       network: x402Network,
-      maxTimeoutSeconds: 60,
+      maxTimeoutSeconds: 180,
     },
     description:
       "Get real-time trading analysis for any crypto pair on HyperLiquid. Returns EMA20, support/resistance, trend, and funding rate.",
@@ -141,34 +148,16 @@ const routes = {
   },
 };
 
-const cdpFacilitatorUrl =
+const cdpFacilitatorUrl = normalizeFacilitatorUrl(
   process.env.CDP_FACILITATOR_URL ||
-  process.env.X402_FACILITATOR_URL ||
-  (hasCdpAuth ? "https://api.cdp.coinbase.com/platform/v2/x402" : "https://www.x402.org/facilitator");
+    process.env.X402_FACILITATOR_URL ||
+    (hasCdpAuth ? "https://api.cdp.coinbase.com/platform/v2/x402" : "https://www.x402.org/facilitator")
+);
 
 const facilitatorConfig = hasCdpAuth
   ? {
       url: cdpFacilitatorUrl,
-      createAuthHeaders: async () => {
-        const { host, pathname } = new URL(cdpFacilitatorUrl);
-        const basePath = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
-        const makeHeaders = async (requestMethod, requestPath) => {
-          const jwt = await generateJwt({
-            apiKeyId: cdpApiKeyId,
-            apiKeySecret: cdpApiKeySecret,
-            requestMethod,
-            requestHost: host,
-            requestPath,
-            expiresIn: 120,
-          });
-          return { Authorization: `Bearer ${jwt}` };
-        };
-        return {
-          supported: await makeHeaders("GET", `${basePath}/supported`),
-          verify: await makeHeaders("POST", `${basePath}/verify`),
-          settle: await makeHeaders("POST", `${basePath}/settle`),
-        };
-      },
+      createAuthHeaders: createCdpAuthHeaders(cdpApiKeyId, cdpApiKeySecret),
     }
   : { url: cdpFacilitatorUrl };
 
