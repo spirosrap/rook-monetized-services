@@ -52,13 +52,7 @@ app.get("/", (req, res) => {
 });
 
 // Payment middleware configuration with CDP facilitator
-const payment = paymentMiddleware(PAY_TO, {
-  facilitatorUrl: process.env.CDP_FACILITATOR_URL || 'https://api.cdp.coinbase.com/v1/x402/facilitator',
-  facilitatorHeaders: {
-    'Authorization': `Bearer ${process.env.CDP_API_KEY}`,
-    'Content-Type': 'application/json'
-  }
-}, {
+const routes = {
   // Simple Ping Service - $0.01 per request
   "GET /api/ping": {
     price: "$0.01",
@@ -161,7 +155,28 @@ const payment = paymentMiddleware(PAY_TO, {
     },
     resource: "https://rook-monetized-services.onrender.com/api/trading-analysis",
   },
-});
+};
+
+const cdpApiKey = process.env.CDP_API_KEY;
+const cdpFacilitatorUrl =
+  process.env.CDP_FACILITATOR_URL || "https://api.cdp.coinbase.com/v1/x402/facilitator";
+
+const facilitator = cdpApiKey
+  ? {
+      url: cdpFacilitatorUrl,
+      createAuthHeaders: async () => {
+        const auth = { Authorization: `Bearer ${cdpApiKey}` };
+        return {
+          verify: auth,
+          settle: auth,
+          supported: auth,
+          list: auth,
+        };
+      },
+    }
+  : undefined;
+
+const payment = paymentMiddleware(PAY_TO, routes, facilitator);
 
 // Health check - FREE (no payment required)
 app.get("/health", (req, res) => {
