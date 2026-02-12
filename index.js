@@ -1,5 +1,6 @@
 const express = require("express");
 const { paymentMiddleware } = require("x402-express");
+const { facilitator } = require("@coinbase/x402");
 const { getTradingAnalysis } = require("./tradingAnalysis");
 
 const app = express();
@@ -34,7 +35,7 @@ app.get("/", (req, res) => {
   });
 });
 
-// Payment middleware configuration
+// Payment middleware configuration with CDP facilitator
 const payment = paymentMiddleware(PAY_TO, {
   // Simple Ping Service - $0.01 per request
   "GET /api/ping": {
@@ -90,7 +91,7 @@ const payment = paymentMiddleware(PAY_TO, {
       },
     },
   },
-});
+}, facilitator);
 
 // Health check - FREE (no payment required)
 app.get("/health", (req, res) => {
