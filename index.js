@@ -2,11 +2,49 @@ const express = require("express");
 const { paymentMiddleware } = require("@x402/express");
 const { HTTPFacilitatorClient, x402ResourceServer } = require("@x402/core/server");
 const { registerExactEvmScheme } = require("@x402/evm/exact/server");
+const { generateJwt } = require("@coinbase/cdp-sdk/auth");
 const { getTradingAnalysis } = require("./tradingAnalysis");
 const { getCodeReview } = require("./codeReview");
 
 const app = express();
 app.set('trust proxy', 1);
+
+function parseLegacyCdpApiKey(rawValue) {
+  if (!rawValue) {
+    return {};
+  }
+
+  const trimmed = rawValue.trim();
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    const id = parsed.apiKeyId || parsed.name || parsed.apiKeyName || parsed.keyId;
+    const secret = parsed.apiKeySecret || parsed.privateKey || parsed.secret;
+    if (id && secret) {
+      return { id, secret };
+    }
+  } catch (error) {
+    // Not JSON, continue with heuristic parsing.
+  }
+
+  const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length >= 2) {
+    return {
+      id: lines[0],
+      secret: lines.slice(1).join("\n"),
+    };
+  }
+
+  const separatorIndex = trimmed.indexOf(":");
+  if (separatorIndex > 0) {
+    return {
+      id: trimmed.slice(0, separatorIndex),
+      secret: trimmed.slice(separatorIndex + 1),
+    };
+  }
+
+  return {};
+}
 
 // Handle OPTIONS for x402 discovery
 app.options('/api/code-review', (req, res) => {
@@ -20,8 +58,14 @@ app.use(express.json());
 
 // Your Coinbase Agentic Wallet address
 const PAY_TO = "0x57CE15395828cB06Dcd514918df0d8D86F815011";
-const cdpApiKey = process.env.CDP_API_KEY;
-const x402Network = process.env.X402_NETWORK || (cdpApiKey ? "eip155:8453" : "eip155:84532");
+const parsedLegacyCdpKey = parseLegacyCdpApiKey(process.env.CDP_API_KEY);
+const cdpApiKeyId =
+  process.env.CDP_API_KEY_ID || process.env.CDP_API_KEY_NAME || parsedLegacyCdpKey.id;
+const cdpApiKeySecret = process.env.CDP_API_KEY_SECRET || parsedLegacyCdpKey.secret
+  ? (process.env.CDP_API_KEY_SECRET || parsedLegacyCdpKey.secret).replace(/\\n/g, "\n")
+  : undefined;
+const hasCdpAuth = Boolean(cdpApiKeyId && cdpApiKeySecret);
+const x402Network = process.env.X402_NETWORK || (hasCdpAuth ? "eip155:8453" : "eip155:84532");
 
 // Root route - service info (no payment required)
 app.get("/", (req, res) => {
@@ -100,17 +144,29 @@ const routes = {
 const cdpFacilitatorUrl =
   process.env.CDP_FACILITATOR_URL ||
   process.env.X402_FACILITATOR_URL ||
-  (cdpApiKey ? "https://api.cdp.coinbase.com/platform/v2/x402" : "https://www.x402.org/facilitator");
+  (hasCdpAuth ? "https://api.cdp.coinbase.com/platform/v2/x402" : "https://www.x402.org/facilitator");
 
-const facilitatorConfig = cdpApiKey
+const facilitatorConfig = hasCdpAuth
   ? {
       url: cdpFacilitatorUrl,
       createAuthHeaders: async () => {
-        const auth = { Authorization: `Bearer ${cdpApiKey}` };
+        const { host, pathname } = new URL(cdpFacilitatorUrl);
+        const basePath = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+        const makeHeaders = async (requestMethod, requestPath) => {
+          const jwt = await generateJwt({
+            apiKeyId: cdpApiKeyId,
+            apiKeySecret: cdpApiKeySecret,
+            requestMethod,
+            requestHost: host,
+            requestPath,
+            expiresIn: 120,
+          });
+          return { Authorization: `Bearer ${jwt}` };
+        };
         return {
-          verify: auth,
-          settle: auth,
-          supported: auth,
+          supported: await makeHeaders("GET", `${basePath}/supported`),
+          verify: await makeHeaders("POST", `${basePath}/verify`),
+          settle: await makeHeaders("POST", `${basePath}/settle`),
         };
       },
     }
@@ -173,7 +229,16 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Rook's Monetized Agent Services running on port ${PORT}`);
   console.log(`💰 Payment address: ${PAY_TO}`);
-  console.log(`🔗 Network: Base (mainnet)`);
+  console.log(`🔗 X402 network: ${x402Network}`);
+  console.log(`🏦 Facilitator: ${cdpFacilitatorUrl}`);
+  if (!hasCdpAuth && process.env.CDP_API_KEY) {
+    console.log(
+      "⚠️ CDP_API_KEY is set but x402 v2 requires CDP_API_KEY_ID + CDP_API_KEY_SECRET for mainnet facilitator auth."
+    );
+  }
+  if (hasCdpAuth && !process.env.CDP_API_KEY_ID && !process.env.CDP_API_KEY_NAME && process.env.CDP_API_KEY) {
+    console.log("ℹ️ Using credentials parsed from CDP_API_KEY fallback. Prefer CDP_API_KEY_ID + CDP_API_KEY_SECRET.");
+  }
   console.log(`\n📋 Available endpoints:`);
   console.log(`   GET  /health               - Free health check`);
   console.log(`   GET  /api/ping             - $0.01 - Payment test`);
