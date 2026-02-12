@@ -75,6 +75,70 @@ function maskAddress(address) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
+function normalizeHexNonce(value) {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  if (/^0x[0-9a-fA-F]+$/.test(trimmed)) {
+    const hex = trimmed.slice(2).toLowerCase();
+    if (hex.length === 64) {
+      return `0x${hex}`;
+    }
+    if (hex.length < 64) {
+      return `0x${hex.padStart(64, "0")}`;
+    }
+    return `0x${hex.slice(-64)}`;
+  }
+
+  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+    return `0x${trimmed.toLowerCase()}`;
+  }
+
+  if (/^[0-9]+$/.test(trimmed)) {
+    try {
+      const hex = BigInt(trimmed).toString(16).padStart(64, "0");
+      return `0x${hex}`;
+    } catch {
+      return trimmed;
+    }
+  }
+
+  return trimmed;
+}
+
+function normalizeAuthorizationPayload(auth) {
+  if (!auth || typeof auth !== "object" || Array.isArray(auth)) {
+    return { auth, changed: false };
+  }
+
+  const normalized = { ...auth };
+  let changed = false;
+
+  const stringFields = ["from", "to", "value", "validAfter", "validBefore", "nonce"];
+  for (const field of stringFields) {
+    if (normalized[field] != null && typeof normalized[field] !== "string") {
+      normalized[field] = String(normalized[field]);
+      changed = true;
+    }
+  }
+
+  if (typeof normalized.nonce === "string") {
+    const nonce = normalizeHexNonce(normalized.nonce);
+    if (nonce !== normalized.nonce) {
+      normalized.nonce = nonce;
+      changed = true;
+    }
+  }
+
+  return { auth: normalized, changed };
+}
+
 function parseRequestBody(body) {
   if (!body) {
     return {};
@@ -229,7 +293,19 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
           ? "transaction"
           : "object"
       : typeof payload;
-  const auth = payloadType === "authorization" ? payload.authorization : null;
+  let auth = payloadType === "authorization" ? payload.authorization : null;
+  let authWasNormalized = false;
+  if (payloadType === "authorization") {
+    const normalized = normalizeAuthorizationPayload(auth);
+    auth = normalized.auth;
+    authWasNormalized = normalized.changed;
+    if (normalized.changed) {
+      paymentPayload.payload.authorization = normalized.auth;
+    }
+    if (typeof paymentPayload.payload.signature === "string" && !paymentPayload.payload.signature.startsWith("0x")) {
+      paymentPayload.payload.signature = `0x${paymentPayload.payload.signature}`;
+    }
+  }
   const authKeys =
     auth && typeof auth === "object" && !Array.isArray(auth) ? Object.keys(auth) : [];
   const authSummary = auth
@@ -263,6 +339,7 @@ resourceServer.onBeforeVerify(({ paymentPayload, requirements }) => {
     payloadJsonLength: payload ? JSON.stringify(payload).length : 0,
     authKeys,
     authSummary,
+    authWasNormalized,
   });
 });
 
