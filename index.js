@@ -1,4 +1,5 @@
 const express = require("express");
+const crypto = require("crypto");
 const { paymentMiddleware } = require("@x402/express");
 const { HTTPFacilitatorClient, x402ResourceServer } = require("@x402/core/server");
 const { registerExactEvmScheme } = require("@x402/evm/exact/server");
@@ -567,6 +568,39 @@ function parseRequestBody(body) {
   }
 }
 
+function extractBearerToken(headerValue) {
+  if (typeof headerValue !== "string") {
+    return "";
+  }
+  const match = headerValue.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : "";
+}
+
+function extractCodeReviewTestToken(req) {
+  const headerToken =
+    req.get("x-code-review-test-token") || req.get("x-test-token") || "";
+  if (typeof headerToken === "string" && headerToken.trim()) {
+    return headerToken.trim();
+  }
+  const bearerToken = extractBearerToken(req.get("authorization"));
+  if (bearerToken) {
+    return bearerToken;
+  }
+  return typeof req.query.token === "string" ? req.query.token.trim() : "";
+}
+
+function tokenMatches(expectedToken, providedToken) {
+  if (!expectedToken || !providedToken) {
+    return false;
+  }
+  const expected = Buffer.from(expectedToken);
+  const provided = Buffer.from(providedToken);
+  if (expected.length !== provided.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(expected, provided);
+}
+
 function buildUsdcAssetAmount(amount, network, assetTransferMethod) {
   const assetInfo = USDC_ASSETS_BY_NETWORK[network] || USDC_ASSETS_BY_NETWORK["eip155:8453"];
   const extra = {
@@ -605,6 +639,7 @@ const cdpApiKeySecret = process.env.CDP_API_KEY_SECRET || parsedLegacyCdpKey.sec
   : undefined;
 const hasCdpAuth = Boolean(cdpApiKeyId && cdpApiKeySecret);
 const x402Network = process.env.X402_NETWORK || (hasCdpAuth ? "eip155:8453" : "eip155:84532");
+const codeReviewTestToken = (process.env.CODE_REVIEW_TEST_TOKEN || "").trim();
 
 // Root route - service info (no payment required)
 app.get("/", (req, res) => {
@@ -911,11 +946,18 @@ app.get("/health", (req, res) => {
     service: "Rook's Monetized Agent Services",
     endpoints: [
       { path: "/api/ping", price: "$0.01", description: "Health check with payment test" },
+      { path: "/api/code-review", price: "$0.50", description: "AI code review (paid)" },
+      {
+        path: "/api/code-review-test",
+        price: "free (token)",
+        description: "Temporary code-review test endpoint. Requires CODE_REVIEW_TEST_TOKEN.",
+      },
       { path: "/api/trading-analysis", price: "$0.25", description: "Real-time trading analysis via HyperLiquid" }
     ],
     wallet: PAY_TO,
     network: "base",
-    note: "Trading analysis live using HyperLiquid real-time data"
+    note: "Trading analysis live using HyperLiquid real-time data",
+    codeReviewTestTokenConfigured: Boolean(codeReviewTestToken),
   });
 });
 
@@ -965,6 +1007,45 @@ app.post("/api/code-review", payment, async (req, res) => {
   res.json(review);
 });
 
+// Temporary testing endpoint: bypasses x402 but requires a shared token.
+app.post("/api/code-review-test", async (req, res) => {
+  if (!codeReviewTestToken) {
+    return res.status(503).json({
+      ok: false,
+      error: "CODE_REVIEW_TEST_TOKEN is not configured on the server",
+    });
+  }
+
+  const providedToken = extractCodeReviewTestToken(req);
+  if (!tokenMatches(codeReviewTestToken, providedToken)) {
+    return res.status(401).json({
+      ok: false,
+      error: "Unauthorized",
+      hint: "Provide x-code-review-test-token (or Bearer token).",
+    });
+  }
+
+  const body = parseRequestBody(req.body);
+  const code = body.code || req.query.code;
+  const language = body.language || req.query.language || "auto";
+
+  if (!code) {
+    return res.status(200).json({
+      ok: false,
+      error: "Code is required",
+      hint: "Send JSON body with {\"code\":\"...\",\"language\":\"javascript\"} or ?code=...",
+      bodyType: typeof req.body,
+    });
+  }
+
+  const review = await getCodeReview(code, language);
+  return res.json({
+    ok: true,
+    mode: "test",
+    review,
+  });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Rook's Monetized Agent Services running on port ${PORT}`);
@@ -991,7 +1072,13 @@ app.listen(PORT, () => {
   console.log(`   GET  /health               - Free health check`);
   console.log(`   GET  /api/ping             - $0.01 - Payment test`);
   console.log(`   POST /api/code-review       - $0.50 - AI code review (OpenAI o3-mini)`);
+  console.log(`   POST /api/code-review-test  - Free (token required) - Temporary code-review test`);
   console.log(`   POST /api/trading-analysis  - $0.25 - Real-time trading analysis`);
+  console.log(
+    `🔐 CODE_REVIEW_TEST_TOKEN: ${
+      codeReviewTestToken ? "configured" : "not configured (test route returns 503)"
+    }`
+  );
   console.log(`\n🧪 Test with: curl http://localhost:${PORT}/health`);
   console.log(`\n📈 Trading analysis powered by HyperLiquid`);
   console.log(`\n🤖 Code review powered by OpenAI gpt-5-mini`);
